@@ -15,11 +15,10 @@ yf.pdr_override()
 
 class backtest:
 
-    def __init__(self, ticker, commission, shares_per_trade, start=1, end="now"):
+    def __init__(self, ticker, commission, shares_per_trade=2, start=1, end="now"):
         """
         Args:
             ticker (str): ticker symbol from yahoo finance
-            years_back (int): how many years from current date to backtest
             commission (float): commission cost per trade
             shares_per_trade (int): number shares purchased per trade
             start (int): number years from end date
@@ -48,12 +47,13 @@ class backtest:
 
         buy_df = self.df[self.df.index.isin(buy_dates)]
         buy_df["date"] = buy_df.index
+        buy_df["shares"] = self.shares_per_trade
 
-        buy_df = buy_df[["Close", "date"]]
+        buy_df = buy_df[["Close", "date", "shares"]]
         return buy_df
 
 
-    def simple_moving_average(self, sma=30):
+    def simple_moving_average(self, sma=30, rm_shares=False):
         """SMA, buy once a month when price drop below specified SMA, SMA acts as a support"""
         
         sma_df = self.df.copy()
@@ -73,7 +73,13 @@ class backtest:
         buy_dates = [date for date in buy_dates if date is not np.nan]
         sma_df = sma_df[sma_df.index.isin(buy_dates)]
         
-        sma_df = sma_df[["Close", "date", col_name]]
+        sma_df["shares"] = self.shares_per_trade
+        sma_df = sma_df[["Close", "date", "shares", col_name]]
+
+        # for sma_multi() strategy to work
+        if rm_shares:
+            del sma_df["shares"]
+
         return sma_df
     
     
@@ -100,7 +106,9 @@ class backtest:
                                                  else False, axis=1)
         sma_df = sma_df[sma_df["buy"]==True]
         sma_df["date"] = sma_df.index
-        sma_df = sma_df[["Close", "date", col_sma1, col_sma2]]
+        sma_df["shares"] = self.shares_per_trade
+        sma_df = sma_df[["Close", "date", "shares", col_sma1, col_sma2]]
+
         return sma_df
 
     
@@ -111,7 +119,7 @@ class backtest:
         if len(sma_list) != len(share_list):
             raise ValueError("sma_list & share_list must have the same length")
 
-        df_list = [self.simple_moving_average(sma) for sma in sma_list]
+        df_list = [self.simple_moving_average(sma, rm_shares=True) for sma in sma_list]
         df = pd.concat(df_list, axis=1)
         del df["Close"]
         del df["date"]
@@ -123,7 +131,7 @@ class backtest:
                 return np.nan
             else:
                 return x[col_sma]
-        
+
         # remove sma if have another longer sma on same day
         sma_list_ = sma_list
         while len(sma_list_) > 1:
@@ -143,20 +151,18 @@ class backtest:
                 if not pd.isnull(x[col_sma]):
                     return share
         df["shares"] = df.apply(lambda x: weight(x), axis=1)
+    
         return df
 
     
     def mixed(self, strategy1, strategy2):
         """buy through 2 mixed strategies of choice"""
-        df = pd.merge(strategy1, strategy2, how="outer", on=["Close", "date"], indicator=True)
+        df = pd.merge(strategy1, strategy2, how="outer", on=["Close", "date", "shares"], indicator=True)
         return df
 
 
     def profit_loss(self, buy_df):
         """P&L, accounting for total trades & commission"""
-
-        if "shares" not in buy_df.columns:
-            buy_df["shares"] = self.shares_per_trade
 
         buy_df["profit"] = buy_df.apply(lambda x: (self.current_price-x["Close"]) * x["shares"], axis=1)        
         buy_df["cost"] = buy_df.apply(lambda x: x["shares"] * x["Close"], axis=1)
@@ -182,7 +188,7 @@ class backtest:
             strategy (dataframe): output from each strategy method
             plottext (str): any text you wish to add in chart
             display (bool): display chart as popout
-            plotname (str): if given, plot will be saved with the name in the results folder"""
+            plotname (str): if given, save plot in path as png"""
         
         plt.figure(figsize=(15,10))
         self.df["Close"].plot(legend=True, title=self.ticker, label="Closing Price")
@@ -207,71 +213,64 @@ class backtest:
             x = self.df.index.tolist()[0]
             plt.text(x, y, plottext, backgroundcolor="white")
         if plotname:
-            plt.savefig(f"results/{plotname}.png", dpi=300)
+            plt.savefig(f"{plotname}.png", dpi=300)
         if display:
             plt.show()
 
 
 if __name__ == "__main__":
-    ticker = "QQQ"
+    # ticker = "QQQ"
     ticker = "SPY"
     
     start = 5
     commission = 1.99
-    shares = 5
-    
+
+    shares = 2
     bt = backtest(ticker, commission, shares, start)
     dca = bt.dollar_cost_averaging()
     margin, profit, trades = bt.result(dca)
     print("DCA", margin, profit, trades)
     text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
-    bt.plot(dca, plottext=text, display=False, plotname=f"{ticker}_DCA")
+    bt.plot(dca, plottext=text, display=False, plotname=f"results/{ticker}_DCA")
     
     sma_day = 100
-    shares = 10
+    shares = 5
     bt = backtest(ticker, commission, shares, start)
     sma = bt.simple_moving_average(sma_day)
     margin, profit, trades = bt.result(sma)
     print("SMA-CLOSE", margin, profit, trades)
     text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
-    bt.plot(sma, plottext=text, display=False, plotname=f"{ticker}_SMA{sma_day}")
-    
-    sma_day1 = 30
-    sma_day2 = 60
-    shares = 20
-    bt = backtest(ticker, commission, shares, start)
-    crossing = bt.sma_crossing(sma_day1, sma_day2)
-    margin, profit, trades = bt.result(crossing)
-    print("SMA-CROSSING", margin, profit, trades)
-    text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
-    bt.plot(crossing, plottext=text, display=False, plotname=f"{ticker}_SMA{sma_day1}-{sma_day2}")
-    
-    sma_day = 30
-    shares = 5
-    bt = backtest(ticker, commission, shares, start)
-    sma = bt.simple_moving_average(sma_day)
-    mixed = bt.mixed(sma, dca)
-    margin, profit, trades = bt.result(mixed)
-    print(f"DCA & SMA{sma_day}", margin, profit, trades)
-    text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
-    bt.plot(mixed, plottext=text, display=False, plotname=f"{ticker}_DCA-SMA{sma_day}")
-    
-    sma_day1 = 30
-    sma_day2 = 50
-    shares = 5
-    bt = backtest(ticker, commission, shares, start)
-    crossing = bt.sma_crossing(sma_day1, sma_day2)
-    mixed = bt.mixed(crossing, dca)
-    margin, profit, trades = bt.result(mixed)
-    print("DCA & SMA-CROSSING", margin, profit, trades)
-    text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
-    bt.plot(mixed, plottext=text, display=False, plotname=f"{ticker}_DCA-SMA{sma_day1}-{sma_day2}")
+    bt.plot(sma, plottext=text, display=False, plotname=f"results/{ticker}_SMA{sma_day}")
 
     bt = backtest(ticker, commission, shares, start)
     multi = bt.sma_multi(sma_list=[100,200,400,500,600,700,800], share_list=[2,2,2,5,5,10,10])
     margin, profit, trades = bt.result(multi)
     print("MULTI-SMA", margin, profit, trades)
     text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
-    bt.plot(multi, plottext=text, display=False, plotname=f"{ticker}_MULTI_SMA")
+    bt.plot(multi, plottext=text, display=False, plotname=f"results/{ticker}_MULTI_SMA")
+    
+    sma_day1 = 30
+    sma_day2 = 60
+    shares = 5
+    bt = backtest(ticker, commission, shares, start)
+    crossing = bt.sma_crossing(sma_day1, sma_day2)
+    margin, profit, trades = bt.result(crossing)
+    print("SMA-CROSSING", margin, profit, trades)
+    text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
+    bt.plot(crossing, plottext=text, display=False, plotname=f"results/{ticker}_SMA{sma_day1}-{sma_day2}")
 
-
+    sma_day1 = 50
+    sma_day2 = 100
+    shares = 10
+    bt = backtest(ticker, commission, shares, start)
+    crossing = bt.sma_crossing(sma_day1, sma_day2)
+    margin, profit, trades = bt.result(crossing)
+    print("SMA-CROSSING", margin, profit, trades)
+    text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
+    bt.plot(crossing, plottext=text, display=False, plotname=f"results/{ticker}_SMA{sma_day1}-{sma_day2}")
+    
+    mixed = bt.mixed(crossing, dca)
+    margin, profit, trades = bt.result(mixed)
+    print("DCA & SMA-CROSSING", margin, profit, trades)
+    text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
+    bt.plot(mixed, plottext=text, display=False, plotname=f"results/{ticker}_DCA-SMA{sma_day1}-{sma_day2}")
