@@ -222,7 +222,7 @@ if __name__ == "__main__":
     # ticker = "QQQ"
     ticker = "SPY"
     
-    start = 5
+    start = 10
     commission = 1.99
 
     shares = 2
@@ -274,3 +274,6 @@ if __name__ == "__main__":
     print("DCA & SMA-CROSSING", margin, profit, trades)
     text = f"Profit: ${profit}\nMargin: {margin}%\nTotal Trades: {trades}"
     bt.plot(mixed, plottext=text, display=False, plotname=f"results/{ticker}_DCA-SMA{sma_day1}-{sma_day2}")
+
+
+
